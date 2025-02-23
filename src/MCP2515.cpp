@@ -68,9 +68,10 @@ int MCP2515Class::begin(long baudRate) {
     CANControllerClass::begin(baudRate);
 
     pinMode(_csPin, OUTPUT);
+    _interruptSemaphore = xSemaphoreCreateBinary();
 
     // start SPI
-    SPI.begin();
+    SPI.begin(36, 37, 35, -1);
 
     reset();
 
@@ -259,8 +260,15 @@ void MCP2515Class::onReceive(void (*callback)(int)) {
 
     if (callback) {
         // SPI.usingInterrupt(digitalPinToInterrupt(_intPin));  // Possibly not needed for ESP32 with FreeRTOS
-
-        attachInterrupt(digitalPinToInterrupt(_intPin), MCP2515Class::onInterrupt, LOW);
+        xTaskCreatePinnedToCore(
+            &MCP2515Class::interruptHandler,
+            "MCP2515",
+            2048,
+            this,
+            1,
+            &_interruptTask,
+            1);
+        attachInterrupt(digitalPinToInterrupt(_intPin), MCP2515Class::onInterrupt, FALLING);
     } else {
         detachInterrupt(digitalPinToInterrupt(_intPin));
 #ifdef SPI_HAS_NOTUSINGINTERRUPT
@@ -410,6 +418,7 @@ void MCP2515Class::dumpRegisters(Stream &out) {
 }
 
 void MCP2515Class::reset() {
+    xSemaphoreTake(_spiSemaphore, portMAX_DELAY);
     SPI.beginTransaction(_spiSettings);
     digitalWrite(_csPin, LOW);
     SPI.transfer(0xc0);
@@ -417,9 +426,10 @@ void MCP2515Class::reset() {
     SPI.endTransaction();
 
     delayMicroseconds(10);
+    xSemaphoreGive(_spiSemaphore);
 }
 
-void IRAM_ATTR MCP2515Class::handleInterrupt() {
+void MCP2515Class::handleInterrupt() {
     if (readRegister(REG_CANINTF) == 0) {
         return;
     }
@@ -431,6 +441,7 @@ void IRAM_ATTR MCP2515Class::handleInterrupt() {
 
 uint8_t MCP2515Class::readRegister(uint8_t address) {
     uint8_t value;
+    xSemaphoreTake(_spiSemaphore, portMAX_DELAY);
 
     SPI.beginTransaction(_spiSettings);
     digitalWrite(_csPin, LOW);
@@ -439,11 +450,12 @@ uint8_t MCP2515Class::readRegister(uint8_t address) {
     value = SPI.transfer(0x00);
     digitalWrite(_csPin, HIGH);
     SPI.endTransaction();
-
+    xSemaphoreGive(_spiSemaphore);
     return value;
 }
 
 void MCP2515Class::modifyRegister(uint8_t address, uint8_t mask, uint8_t value) {
+    xSemaphoreTake(_spiSemaphore, portMAX_DELAY);
     SPI.beginTransaction(_spiSettings);
     digitalWrite(_csPin, LOW);
     SPI.transfer(0x05);
@@ -452,9 +464,11 @@ void MCP2515Class::modifyRegister(uint8_t address, uint8_t mask, uint8_t value) 
     SPI.transfer(value);
     digitalWrite(_csPin, HIGH);
     SPI.endTransaction();
+    xSemaphoreGive(_spiSemaphore);
 }
 
 void MCP2515Class::writeRegister(uint8_t address, uint8_t value) {
+    xSemaphoreTake(_spiSemaphore, portMAX_DELAY);
     SPI.beginTransaction(_spiSettings);
     digitalWrite(_csPin, LOW);
     SPI.transfer(0x02);
@@ -462,10 +476,19 @@ void MCP2515Class::writeRegister(uint8_t address, uint8_t value) {
     SPI.transfer(value);
     digitalWrite(_csPin, HIGH);
     SPI.endTransaction();
+    xSemaphoreGive(_spiSemaphore);
+}
+
+[[noreturn]] void MCP2515Class::interruptHandler(void* pvParameters) {
+    Serial.println("MCP2515Class::interruptHandler: Started interrupt handler task");
+    for (;;) { // loop forever
+        xSemaphoreTake(CAN._interruptSemaphore, portMAX_DELAY); // wait for interrupt to be released
+        CAN.handleInterrupt();
+    }
 }
 
 void IRAM_ATTR MCP2515Class::onInterrupt() {
-    CAN.handleInterrupt();
+    xSemaphoreGiveFromISR(CAN._interruptSemaphore, nullptr);
 }
 
 MCP2515Class CAN;
