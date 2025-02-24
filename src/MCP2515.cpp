@@ -69,6 +69,7 @@ int MCP2515Class::begin(long baudRate) {
 
     pinMode(_csPin, OUTPUT);
     _interruptSemaphore = xSemaphoreCreateBinary();
+    _spiSemaphore = xSemaphoreCreateBinary();
 
     // start SPI
     SPI.begin(36, 37, 35, -1);
@@ -141,7 +142,7 @@ int MCP2515Class::begin(long baudRate) {
     if (readRegister(REG_CANCTRL) != 0x00) {
         return 0;
     }
-
+    _hasBegun = true;
     return 1;
 }
 

@@ -65,9 +65,7 @@ private:
   static void interruptHandler(void* arg);
 
 private:
-
-
-
+  bool _hasBegun = false;
   SemaphoreHandle_t _spiSemaphore; // FreeRTOS semaphore for SPI bus sharing
   SemaphoreHandle_t _interruptSemaphore; // FreeRTOS semaphore for interrupt handling
   TaskHandle_t _interruptTask; // FreeRTOS task handle for interrupt handling
