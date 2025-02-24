@@ -70,6 +70,7 @@ int MCP2515Class::begin(long baudRate) {
     pinMode(_csPin, OUTPUT);
     _interruptSemaphore = xSemaphoreCreateBinary();
     _spiSemaphore = xSemaphoreCreateBinary();
+    xSemaphoreGive(_spiSemaphore); // give the semaphore to allow SPI access
 
     // start SPI
     SPI.begin(36, 37, 35, -1);
@@ -260,7 +261,6 @@ void MCP2515Class::onReceive(void (*callback)(int)) {
     pinMode(_intPin, INPUT);
 
     if (callback) {
-        // SPI.usingInterrupt(digitalPinToInterrupt(_intPin));  // Possibly not needed for ESP32 with FreeRTOS
         xTaskCreatePinnedToCore(
             &MCP2515Class::interruptHandler,
             "MCP2515",
@@ -268,8 +268,9 @@ void MCP2515Class::onReceive(void (*callback)(int)) {
             this,
             1,
             &_interruptTask,
-            1);
-        attachInterrupt(digitalPinToInterrupt(_intPin), MCP2515Class::onInterrupt, FALLING);
+            0);
+        attachInterrupt(digitalPinToInterrupt(_intPin), MCP2515Class::onInterrupt, LOW);
+        xSemaphoreGive(_interruptSemaphore);
     } else {
         detachInterrupt(digitalPinToInterrupt(_intPin));
 #ifdef SPI_HAS_NOTUSINGINTERRUPT
@@ -484,6 +485,7 @@ void MCP2515Class::writeRegister(uint8_t address, uint8_t value) {
     Serial.println("MCP2515Class::interruptHandler: Started interrupt handler task");
     for (;;) { // loop forever
         xSemaphoreTake(CAN._interruptSemaphore, portMAX_DELAY); // wait for interrupt to be released
+        Serial.println("MCP2515Class::interruptHandler: Interrupt received");
         CAN.handleInterrupt();
     }
 }
