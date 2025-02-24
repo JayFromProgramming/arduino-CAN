@@ -258,7 +258,7 @@ int MCP2515Class::parsePacket() {
 void MCP2515Class::onReceive(void (*callback)(int)) {
     CANControllerClass::onReceive(callback); // set callback
 
-    pinMode(_intPin, INPUT);
+    pinMode(_intPin, INPUT_PULLUP);
 
     if (callback) {
         xTaskCreatePinnedToCore(
@@ -482,11 +482,10 @@ void MCP2515Class::writeRegister(uint8_t address, uint8_t value) {
 }
 
 [[noreturn]] void MCP2515Class::interruptHandler(void* pvParameters) {
-    Serial.println("MCP2515Class::interruptHandler: Started interrupt handler task");
+    Serial.println("MCP2515Class::interruptPoller: Interrupt handler started");
     for (;;) { // loop forever
-        xSemaphoreTake(CAN._interruptSemaphore, portMAX_DELAY); // wait for interrupt to be released
-        Serial.println("MCP2515Class::interruptHandler: Interrupt received");
         CAN.handleInterrupt();
+        vTaskDelay(5);  // Delay 5 ticks to prevent completely hogging CPU0
     }
 }
 
