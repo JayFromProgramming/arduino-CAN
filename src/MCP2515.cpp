@@ -275,7 +275,7 @@ void MCP2515Class::onReceive(void (*callback)(int)) {
 #else
         SPI.usingInterrupt(digitalPinToInterrupt(_intPin));
 #endif
-        attachInterrupt(digitalPinToInterrupt(_intPin), MCP2515Class::onInterrupt, LOW);
+        attachInterrupt(digitalPinToInterrupt(_intPin), MCP2515Class::onInterrupt, FALLING);
     } else {
 #ifdef ARDUINO_ARCH_ESP32
         vTaskDelete(_interruptTask); // stop the interrupt task
@@ -427,15 +427,10 @@ void MCP2515Class::dumpRegisters(Stream &out) {
     }
 }
 
-void MCP2515Class::reset() {
-    xSemaphoreTake(_spiSemaphore, portMAX_DELAY);
-    SPI.beginTransaction(_spiSettings);
-    digitalWrite(_csPin, LOW);
+void MCP2515Class::reset() const {
+    acquireSPIBus();
     SPI.transfer(0xc0);
-    digitalWrite(_csPin, HIGH);
-    SPI.endTransaction();
-
-    delayMicroseconds(10);
+    releaseSPIBus();
     xSemaphoreGive(_spiSemaphore);
 }
 
@@ -443,11 +438,13 @@ bool MCP2515Class::handleInterrupt() {
     if (readRegister(REG_CANINTF) == 0) {
         return false;
     }
-
+    bool hadPacket = false;
     while (parsePacket() || _rxId != -1) {
-        _onReceive(available());
+        const uint16_t avail = available();
+        _onReceive(avail);
+        if (avail) hadPacket = true;
     }
-    return true;
+    return hadPacket;
 }
 
 uint8_t MCP2515Class::readRegister(uint8_t address) const {
@@ -499,6 +496,7 @@ void MCP2515Class::releaseSPIBus() const {
     for (;;) { // loop forever
         if (xSemaphoreTake(CAN._interruptSemaphore, 250) == pdTRUE) {
             CAN.handleInterrupt();
+            if (digitalRead(CAN._intPin) == LOW) xSemaphoreGive(CAN._interruptSemaphore);
         } else {
             if (digitalRead(CAN._intPin) == LOW) {
                 Serial.println("MCP2515Class::interruptTask: Interrupt triggered but semaphore not taken");
