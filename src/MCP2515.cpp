@@ -431,7 +431,6 @@ void MCP2515Class::reset() const {
     acquireSPIBus();
     SPI.transfer(0xc0);
     releaseSPIBus();
-    xSemaphoreGive(_spiSemaphore);
 }
 
 bool MCP2515Class::handleInterrupt() {
