@@ -259,7 +259,7 @@ int MCP2515Class::parsePacket() {
 void MCP2515Class::onReceive(void (*callback)(int)) {
     CANControllerClass::onReceive(callback); // set callback
 
-    pinMode(_intPin, INPUT);
+    pinMode(_intPin, INPUT_PULLUP);
 
     if (callback) {
 #ifdef ARDUINO_ARCH_ESP32
@@ -497,7 +497,7 @@ void MCP2515Class::releaseSPIBus() const {
 [[noreturn]] void MCP2515Class::interruptTask(void* pvParameters) {
     Serial.println("MCP2515Class::interruptTask: Interrupt task started");
     for (;;) { // loop forever
-        if (xSemaphoreTake(CAN._interruptSemaphore, (20 * 1000 / portTICK_PERIOD_MS)) == pdTRUE) {
+        if (xSemaphoreTake(CAN._interruptSemaphore, 250) == pdTRUE) {
             CAN.handleInterrupt();
         } else {
             if (CAN.handleInterrupt()) {
