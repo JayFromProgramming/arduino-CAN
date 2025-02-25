@@ -500,6 +500,9 @@ void MCP2515Class::releaseSPIBus() const {
         if (xSemaphoreTake(CAN._interruptSemaphore, 250) == pdTRUE) {
             CAN.handleInterrupt();
         } else {
+            if (digitalRead(CAN._intPin) == LOW) {
+                Serial.println("MCP2515Class::interruptTask: Interrupt triggered but semaphore not taken");
+            }
             if (CAN.handleInterrupt()) {
                 Serial.println("MCP2515Class::interruptTask: Interrupt failure detected");
             }
