@@ -68,10 +68,11 @@ int MCP2515Class::begin(long baudRate) {
     CANControllerClass::begin(baudRate);
 
     pinMode(_csPin, OUTPUT);
+#ifdef ARDUINO_ARCH_ESP32
     _interruptSemaphore = xSemaphoreCreateBinary();
     _spiSemaphore = xSemaphoreCreateBinary();
     xSemaphoreGive(_spiSemaphore); // give the semaphore to allow SPI access
-
+#endif
     // start SPI
     SPI.begin(36, 37, 35, -1);
 
@@ -258,20 +259,27 @@ int MCP2515Class::parsePacket() {
 void MCP2515Class::onReceive(void (*callback)(int)) {
     CANControllerClass::onReceive(callback); // set callback
 
-    pinMode(_intPin, INPUT_PULLUP);
+    pinMode(_intPin, INPUT);
 
     if (callback) {
-        xTaskCreatePinnedToCore(
-            &MCP2515Class::interruptHandler,
-            "MCP2515",
+#ifdef ARDUINO_ARCH_ESP32
+        xTaskCreatePinnedToCore(  // create a task to handle the interrupts in task context instead of ISR context
+            &MCP2515Class::interruptTask,
+            "MCP2515-Handler",
             2048,
             this,
             1,
             &_interruptTask,
             0);
+        xSemaphoreGive(_interruptSemaphore); // Give the semaphore once to catch any preexisting interrupts
+#else
+        SPI.usingInterrupt(digitalPinToInterrupt(_intPin));
+#endif
         attachInterrupt(digitalPinToInterrupt(_intPin), MCP2515Class::onInterrupt, LOW);
-        xSemaphoreGive(_interruptSemaphore);
     } else {
+#ifdef ARDUINO_ARCH_ESP32
+        vTaskDelete(_interruptTask); // stop the interrupt task
+#endif
         detachInterrupt(digitalPinToInterrupt(_intPin));
 #ifdef SPI_HAS_NOTUSINGINTERRUPT
     SPI.notUsingInterrupt(digitalPinToInterrupt(_intPin));
@@ -431,66 +439,85 @@ void MCP2515Class::reset() {
     xSemaphoreGive(_spiSemaphore);
 }
 
-void MCP2515Class::handleInterrupt() {
+bool MCP2515Class::handleInterrupt() {
     if (readRegister(REG_CANINTF) == 0) {
-        return;
+        return false;
     }
 
     while (parsePacket() || _rxId != -1) {
         _onReceive(available());
     }
+    return true;
 }
 
-uint8_t MCP2515Class::readRegister(uint8_t address) {
+uint8_t MCP2515Class::readRegister(uint8_t address) const {
     uint8_t value;
-    xSemaphoreTake(_spiSemaphore, portMAX_DELAY);
-
-    SPI.beginTransaction(_spiSettings);
-    digitalWrite(_csPin, LOW);
+    acquireSPIBus();
     SPI.transfer(0x03);
     SPI.transfer(address);
     value = SPI.transfer(0x00);
-    digitalWrite(_csPin, HIGH);
-    SPI.endTransaction();
-    xSemaphoreGive(_spiSemaphore);
+    releaseSPIBus();
     return value;
 }
 
-void MCP2515Class::modifyRegister(uint8_t address, uint8_t mask, uint8_t value) {
-    xSemaphoreTake(_spiSemaphore, portMAX_DELAY);
-    SPI.beginTransaction(_spiSettings);
-    digitalWrite(_csPin, LOW);
+void MCP2515Class::modifyRegister(uint8_t address, uint8_t mask, uint8_t value) const {
+    acquireSPIBus();
     SPI.transfer(0x05);
     SPI.transfer(address);
     SPI.transfer(mask);
     SPI.transfer(value);
-    digitalWrite(_csPin, HIGH);
-    SPI.endTransaction();
-    xSemaphoreGive(_spiSemaphore);
+    releaseSPIBus();
 }
 
-void MCP2515Class::writeRegister(uint8_t address, uint8_t value) {
-    xSemaphoreTake(_spiSemaphore, portMAX_DELAY);
-    SPI.beginTransaction(_spiSettings);
-    digitalWrite(_csPin, LOW);
+void MCP2515Class::writeRegister(uint8_t address, uint8_t value) const {
+    acquireSPIBus();
     SPI.transfer(0x02);
     SPI.transfer(address);
     SPI.transfer(value);
-    digitalWrite(_csPin, HIGH);
-    SPI.endTransaction();
-    xSemaphoreGive(_spiSemaphore);
+    releaseSPIBus();
 }
 
-[[noreturn]] void MCP2515Class::interruptHandler(void* pvParameters) {
-    Serial.println("MCP2515Class::interruptPoller: Interrupt handler started");
+void MCP2515Class::acquireSPIBus() const {
+#ifdef ARDUINO_ARCH_ESP32
+    xSemaphoreTake(_spiSemaphore, portMAX_DELAY);  // Only needed for ESP32 with FreeRTOS
+#endif
+    SPI.beginTransaction(_spiSettings);
+    digitalWrite(_csPin, LOW);
+}
+
+void MCP2515Class::releaseSPIBus() const {
+    digitalWrite(_csPin, HIGH);
+    SPI.endTransaction();
+#ifdef ARDUINO_ARCH_ESP32
+    xSemaphoreGive(_spiSemaphore);
+#endif
+}
+
+#ifdef ARDUINO_ARCH_ESP32
+[[noreturn]] void MCP2515Class::interruptTask(void* pvParameters) {
+    Serial.println("MCP2515Class::interruptTask: Interrupt task started");
     for (;;) { // loop forever
-        CAN.handleInterrupt();
-        vTaskDelay(5);  // Delay 5 ticks to prevent completely hogging CPU0
+        if (xSemaphoreTake(CAN._interruptSemaphore, 15) == pdTRUE) {
+            CAN.handleInterrupt();
+        } else {
+            Serial.println("MCP2515Class::interruptTask: Interrupt starvation detected");
+            if (CAN.handleInterrupt()) {
+                Serial.println("MCP2515Class::interruptTask: Interrupt failure recovered");
+            }
+        }
     }
 }
 
 void IRAM_ATTR MCP2515Class::onInterrupt() {
     xSemaphoreGiveFromISR(CAN._interruptSemaphore, nullptr);
 }
+
+#else
+
+void MCP2515Class::onInterrupt() {
+    CAN.handleInterrupt();
+}
+
+#endif
 
 MCP2515Class CAN;
