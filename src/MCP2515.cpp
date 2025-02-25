@@ -266,11 +266,11 @@ void MCP2515Class::onReceive(void (*callback)(int)) {
         xTaskCreatePinnedToCore(  // create a task to handle the interrupts in task context instead of ISR context
             &MCP2515Class::interruptTask,
             "MCP2515-Handler",
-            2048,
+            1024,
             this,
-            1,
+            1,  // Set to max priority
             &_interruptTask,
-            0);
+            0);  // Pinned to core 0 as the default arduino loop() runs on core 1
         xSemaphoreGive(_interruptSemaphore); // Give the semaphore once to catch any preexisting interrupts
 #else
         SPI.usingInterrupt(digitalPinToInterrupt(_intPin));
@@ -497,12 +497,11 @@ void MCP2515Class::releaseSPIBus() const {
 [[noreturn]] void MCP2515Class::interruptTask(void* pvParameters) {
     Serial.println("MCP2515Class::interruptTask: Interrupt task started");
     for (;;) { // loop forever
-        if (xSemaphoreTake(CAN._interruptSemaphore, 15) == pdTRUE) {
+        if (xSemaphoreTake(CAN._interruptSemaphore, (20 * 1000 / portTICK_PERIOD_MS)) == pdTRUE) {
             CAN.handleInterrupt();
         } else {
-            Serial.println("MCP2515Class::interruptTask: Interrupt starvation detected");
             if (CAN.handleInterrupt()) {
-                Serial.println("MCP2515Class::interruptTask: Interrupt failure recovered");
+                Serial.println("MCP2515Class::interruptTask: Interrupt failure detected");
             }
         }
     }
