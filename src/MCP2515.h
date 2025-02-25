@@ -52,7 +52,7 @@ public:
   void dumpRegisters(Stream& out);
 
 private:
-  void reset();
+  void reset() const;
 
   bool handleInterrupt();
 
